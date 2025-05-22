@@ -1,7 +1,7 @@
 /*
     Sample of static in function, variable that wont be destroyed despite function exiting!
     Also recursion example, function calls itself
-    Also not very commond - using pointer in recursion
+    Also not very common - using pointer in recursion
     There is no practical value in increasing value like this, but its just to show
     how flexible C really is, try to wrap yoru head around it, how you can construct things
     and then you can apply this knowledge in ways nobody cant even follow...
