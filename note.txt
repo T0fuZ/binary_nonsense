@@ -1,0 +1,8 @@
+Don't change my line endings!
+git config --global core.autocrlf false 
+
+
+Escape 'https' checkout:
+git remote set-url origin git@github.com:T0fuZ/binary_nonsense.git
+
+
