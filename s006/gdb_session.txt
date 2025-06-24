@@ -1,0 +1,52 @@
+(gdb) set disassembly-flavor intel
+(gdb) break link if v==440
+Breakpoint 1 at 0x401624: file main.c, line 22.
+(gdb) break del
+Breakpoint 2 at 0x401699: file main.c, line 40.
+(gdb) break dump
+Breakpoint 3 at 0x4015c6: file main.c, line 11.
+(gdb) run
+Starting program: a.exe
+[New Thread 17996.0x462c]
+[New Thread 17996.0xf5c]
+
+Thread 1 hit Breakpoint 1, link (v=440) at main.c:22
+22          n *z = malloc(sizeof(n));
+(gdb) call dump()
+
+Thread 1 hit Breakpoint 3, dump () at main.c:11
+11          printf("\n--- dumping linked list---\n");
+The program being debugged stopped while in a function called from GDB.
+Evaluation of the expression containing the function
+(dump) will be abandoned.
+When the function is done executing, GDB will silently stop.
+(gdb) c
+Continuing.
+
+--- dumping linked list---
+[13] (address: 007616D0, previous:00000000, next:00762490
+[14] (address: 00762490, previous:007616D0, next:007624B8
+[22] (address: 007624B8, previous:00762490, next:007624E0
+[49] (address: 007624E0, previous:007624B8, next:00000000
+(gdb) x/4wx h
+0x7616d0:       0x0000000d      0x00000000      0x00762490      0xabababab
+(gdb) x/a h->n
+0x762490:       0xe
+(gdb) x/a h->n->n
+0x7624b8:       0x16
+(gdb) x/a h->n->n->n
+0x7624e0:       0x31
+(gdb) x/ad h->n->n->n
+0x7624e0:       49
+(gdb) x/ad h->n->n
+0x7624b8:       22
+(gdb) x/ad h->n->p->n->p->n->p->n->p
+0x7616d0:       13
+(gdb) p h
+$1 = (n *) 0x7616d0
+(gdb) p h->n
+$2 = (struct n *) 0x762490
+(gdb) p *h->n
+$3 = {d = 14, p = 0x7616d0, n = 0x7624b8}
+(gdb) p *h
+$4 = {d = 13, p = 0x0, n = 0x762490}
