@@ -59,6 +59,16 @@ def init_db():
             FOREIGN KEY (task_id) REFERENCES tasks(id)
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS cal3nder (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER,
+            timestamp TEXT NOT NULL,
+            description TEXT NOT NULL,
+            FOREIGN KEY (project_id) REFERENCES projects(id)
+        )
+    ''')
+    
 
     conn.commit()
     conn.close()
@@ -73,10 +83,17 @@ def human_delta(dt):
 def duration_to_str(seconds):
     if seconds == 0:
         return "0s"
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    return f"{h}h{m:02}m{s:02}s"
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+
+    parts = []
+    if days: parts.append(f"{days}d")
+    if hours or days: parts.append(f"{hours}h")
+    if minutes or hours or days: parts.append(f"{minutes}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
 
 def parse_duration(text):
     total = 0
@@ -441,7 +458,85 @@ class Task3rShell:
         conn.close()
         print(f"Project '{name}' and all associated tasks, slices, time logs, and logs deleted.")
 
+    def handle_cal3(self, tokens):
+        conn = get_db()
+        c = conn.cursor()
 
+        if len(tokens) >= 3:
+            # Adding a new entry
+            if not self.project_id:
+                print("Use a project first to add cal3nder events.")
+                conn.close()
+                return
+
+            try:
+                if re.match(r'\d{4}\.\d{2}\.\d{2}', tokens[1]):
+                    date_part = tokens[1]
+                    time_part = tokens[2]
+                    desc = " ".join(tokens[3:])
+                else:
+                    now = datetime.now().strftime('%Y.%m.%d')
+                    date_part = now
+                    time_part = tokens[1]
+                    desc = " ".join(tokens[2:])
+
+                full_str = f"{date_part} {time_part}"
+                if len(full_str.split(":")) == 2:
+                    full_str += ":00"
+                dt = datetime.strptime(full_str, "%Y.%m.%d %H:%M:%S")
+                timestamp = dt.replace(tzinfo=timezone.utc).isoformat()
+                c.execute("INSERT INTO cal3nder (project_id, timestamp, description) VALUES (?, ?, ?)",
+                          (self.project_id, timestamp, desc))
+                conn.commit()
+                print("Cal3nder entry added.")
+            except Exception as e:
+                print("Invalid format. Use:")
+                print("  cal3 [yyyy.mm.dd] hh:mm[:ss] Description")
+                print("  (date optional, seconds optional)")
+                print(f"Error: {e}")
+            conn.close()
+            return
+
+        # Viewing entries
+        past_mode = len(tokens) == 2 and tokens[1] == "past"
+        now = datetime.now(timezone.utc)
+
+        if self.project_id:
+            c.execute("SELECT timestamp, description FROM cal3nder WHERE project_id = ?", (self.project_id,))
+            rows = c.fetchall()
+            print("CAL3NDER:")
+            rows = [(datetime.fromisoformat(ts).replace(tzinfo=timezone.utc), desc) for ts, desc in rows]
+            rows.sort(key=lambda r: r[0])
+            for ts, desc in rows:
+                delta = now - ts
+                delta_str = duration_to_str(abs(int(delta.total_seconds())))
+                time_str = ts.astimezone().strftime("%Y.%m.%d %H:%M:%S")
+                if past_mode and delta.total_seconds() >= 0:
+                    print(f"{time_str} ({delta_str} ago) {desc}")
+                elif not past_mode and delta.total_seconds() < 0:
+                    print(f"{time_str} (in {delta_str}) {desc}")
+        else:
+            c.execute("SELECT p.name, c.timestamp, c.description FROM cal3nder c JOIN projects p ON c.project_id = p.id")
+            rows = [(proj, datetime.fromisoformat(ts).replace(tzinfo=timezone.utc), desc) for proj, ts, desc in c.fetchall()]
+            rows.sort(key=lambda r: r[1])
+
+            grouped = {}
+            for proj, ts, desc in rows:
+                grouped.setdefault(proj, []).append((ts, desc))
+
+            for proj, entries in grouped.items():
+                print(f"CAL3NDER: {proj}")
+                for ts, desc in entries:
+                    delta = now - ts
+                    delta_str = duration_to_str(abs(int(delta.total_seconds())))
+                    time_str = ts.astimezone().strftime("%Y.%m.%d %H:%M:%S")
+                    if past_mode and delta.total_seconds() >= 0:
+                        print(f"  {time_str} ({delta_str} ago) {desc}")
+                    elif not past_mode and delta.total_seconds() < 0:
+                        print(f"  {time_str} (in {delta_str}) {desc}")
+                print()
+
+        conn.close()
     def generate_project_report(self):
         import re
         from pathlib import Path
@@ -460,12 +555,14 @@ class Task3rShell:
         project_name = row[0]
         safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', project_name.strip())
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        #filename = f"report_{safe_name}_{timestamp}.html"
         filename = f"report_{safe_name}.html"
 
+        # Logs
         c.execute("SELECT timestamp, text FROM logs WHERE project_id = ? ORDER BY timestamp", (self.project_id,))
-        logs = [(datetime.fromisoformat(ts).replace(tzinfo=timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M:%S'), text) for ts, text in c.fetchall()]
+        logs = [(datetime.fromisoformat(ts).replace(tzinfo=timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M:%S'), text)
+                for ts, text in c.fetchall()]
 
+        # Tasks and slices
         c.execute("SELECT id, description, done FROM tasks WHERE project_id = ? ORDER BY ordering", (self.project_id,))
         task_rows = c.fetchall()
 
@@ -491,6 +588,7 @@ class Task3rShell:
                         s_total += s_end_ts - s_start_ts
                 all_slices.append((f"{desc}: {sname}", bool(sdone), duration_to_str(s_total)))
 
+        # Time logs
         c.execute("""
             SELECT t.description, s.name, tl.start_time, tl.end_time, tl.manual_seconds
             FROM time_logs tl
@@ -542,6 +640,21 @@ class Task3rShell:
             first_date = last_date = "N/A"
 
         total_time_str = duration_to_str(total_seconds)
+
+        # Cal3nder events
+        c.execute("SELECT timestamp, description FROM cal3nder WHERE project_id = ? ORDER BY timestamp", (self.project_id,))
+        cal_events = []
+        now = datetime.now(timezone.utc)
+        for ts_str, desc in c.fetchall():
+            try:
+                dt = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
+            except:
+                dt = datetime.strptime(ts_str.split('.')[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            local_dt = dt.astimezone()
+            delta = int((local_dt - datetime.now(local_dt.tzinfo)).total_seconds())
+            rel = duration_to_str(abs(delta))
+            rel_text = f"in {rel}" if delta > 0 else f"{rel} ago"
+            cal_events.append((local_dt.strftime("%Y-%m-%d %H:%M:%S"), rel_text, desc))
 
         conn.close()
 
@@ -595,6 +708,12 @@ class Task3rShell:
                 {''.join(f'<tr><td>{name}</td><td class="{ "done" if done else "notdone" }">{ "✓" if done else "✗" }</td><td>{time}</td></tr>' for name, done, time in all_slices)}
             </table>
 
+            <h2>Cal3nder Events</h2>
+            <table>
+                <tr><th>Date</th><th>When</th><th>Description</th></tr>
+                {''.join(f'<tr><td>{date}</td><td>{when}</td><td>{desc}</td></tr>' for date, when, desc in cal_events)}
+            </table>
+
             <h2>Time Tracking Log</h2>
             <table>
                 <tr><th>Task</th><th>Slice</th><th>Start</th><th>End</th><th>Duration</th><th>Type</th></tr>
@@ -608,6 +727,7 @@ class Task3rShell:
             f.write(html)
 
         print(f"Report saved as: {filename}")
+
 
     def delete_slice(self, tokens):
         if len(tokens) != 3:
@@ -1050,7 +1170,8 @@ Available Commands:
             conn.close()
             print("Reordered.")
 
-
+        elif command == "cal3":
+            self.handle_cal3(tokens)
         elif command == "log":
             if not self.project_id:
                 print("Use a project first.")
